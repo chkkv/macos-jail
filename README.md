@@ -46,7 +46,8 @@ cd ~/myjail
 ./jail.sh start                       # 进入交互式 jail（bash -l）
 ./jail.sh start 'id; ls -la /'        # 在 jail 内执行 shell 命令
 JAIL_TMPFS_SIZE=2g ./jail.sh start    # 指定 /tmp tmpfs 大小
-./jail.sh stop                        # 停止 jail-authd，卸载 devfs 和 tmpfs
+./jail.sh stop                        # 检查/关闭 jail 进程后卸载
+./jail.sh stop -y                     # 不询问，强制关闭占用进程
 ```
 
 `build`、`start`、`set-user-password`、`stop` 需要 root，脚本会自动通过 `sudo` 重新执行。
@@ -235,6 +236,28 @@ cannot create temp file for here-document: Permission denied
 `build` 和 `install-cmdlinetools` 都会确保该链接存在；补上后安装脚本可
 正常返回 0。
 
+## 停止时的进程检查
+
+`stop` 在卸载前会查找**可执行文件位于 rootfs 内**的进程，例如 jail 里的
+shell、`brew`、编译任务等。它不会把仅仅把 rootfs 当作 cwd 的宿主终端
+误判为 jail 进程。
+
+- 找到进程时，最多显示 6 行：
+  ```text
+  warning: 2 process(es) are using files in the jail:
+      1234  sleep
+      5678  bash
+  ```
+- 然后询问：
+  ```text
+  Kill these processes and continue? [y/N]
+  ```
+- 输入 `y`/`yes`：先发送 `TERM`，等待后仍存活则发送 `KILL`，再停止
+  `jail-authd` 并卸载 devfs/tmpfs。
+- 其它输入或直接 EOF：取消 `stop`，jail 继续运行。
+- `stop -y` 或 `stop --yes`：不询问，直接关闭这些进程，适合脚本/非交互环境。
+- `jail-authd`、PID 1、停止脚本自身及其父子进程会被排除。
+
 ## 模拟 su/sudo
 
 jail 内的 `sudo`/`su` 是普通客户端（`/usr/local/bin/sudo`、`/usr/local/bin/su`，
@@ -318,8 +341,8 @@ sudo -S id              # 从 stdin 读密码（脚本用）
 - jail 内 home 是独立空目录，不是宿主机的 `/Users/chkkv`。
 - `df` 可能打印 `getattrlist failed for /System/Volumes/Data`，但结果仍可用；
   这是 chroot 中缺少该挂载点导致的。
-- `stop` 会先停止 `jail-authd`；如果 jail 内仍有进程，devfs 或 tmpfs 卸载会
-  busy，请先退出 jail 再执行。
+- `stop` 会先检查并（按确认或 `-y`）关闭 jail 内进程，然后停止
+  `jail-authd` 并卸载 devfs/tmpfs；如果进程无法关闭，卸载会 busy。
 - 修改 `jail-launcher.c` / `jail-auth.c` 后重新运行 `./jail.sh build`。
 - `build` 清除 `etc/`，因此容器密码会丢失，需要重新 `set-user-password`。
 - `build` 还会重建 `Users/` 和 `var/root`，home 下的 `.profile`、`.bashrc`

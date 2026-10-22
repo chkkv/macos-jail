@@ -56,7 +56,7 @@ usage: $0 <command>
   start [command]             enter the jail, or run a shell command inside
   install-cmdlinetools        install Apple Command Line Tools into the jail
   set-user-password [pwd]     set the container password (--clear to remove)
-  stop                        stop jail-authd and unmount the jail's devfs
+  stop [-y]                   stop jail-authd, close jail processes, unmount
 EOF
 }
 
@@ -103,6 +103,145 @@ mount_jail_tmp() {
 umount_jail_tmp() {
     if is_tmpfs_mounted; then
         /sbin/umount "$ROOT/private/tmp" || return 1
+    fi
+    return 0
+}
+
+jail_process_pids() {
+    [ -x /usr/sbin/lsof ] || return 1
+    # -a -d txt restricts the scan to processes whose executable is inside
+    # the jail. This avoids matching a host terminal that merely has the
+    # rootfs as its cwd.
+    /usr/sbin/lsof -nP -w -t +D "$ROOT" -a -d txt 2>/dev/null |
+        /usr/bin/sort -u
+}
+
+is_self_or_ancestor() {
+    local candidate=$1
+    local p=$$
+    local i=0
+    while [ -n "$p" ] && [ "$p" -gt 1 ] && [ "$i" -lt 30 ]; do
+        [ "$p" = "$candidate" ] && return 0
+        p=$(/bin/ps -p "$p" -o ppid= 2>/dev/null | /usr/bin/tr -d ' ')
+        i=$((i + 1))
+    done
+    return 1
+}
+
+is_descendant_of_self() {
+    local p=$1
+    local i=0
+    while [ -n "$p" ] && [ "$p" -gt 1 ] && [ "$i" -lt 30 ]; do
+        [ "$p" = "$$" ] && return 0
+        p=$(/bin/ps -p "$p" -o ppid= 2>/dev/null | /usr/bin/tr -d ' ')
+        i=$((i + 1))
+    done
+    return 1
+}
+
+filter_jail_pids() {
+    local auth_pid p cmd
+    auth_pid=$(/bin/cat "$AUTH_PID" 2>/dev/null || true)
+    for p in $(jail_process_pids); do
+        case "$p" in
+            ''|*[!0-9]*) continue ;;
+        esac
+        [ "$p" -le 1 ] && continue
+        [ -n "$auth_pid" ] && [ "$p" = "$auth_pid" ] && continue
+        cmd=$(/bin/ps -p "$p" -o command= 2>/dev/null || true)
+        [ -n "$cmd" ] || continue
+        case "$cmd" in
+            *"$AUTHD --root $ROOT"*) continue ;;
+            */sbin/launchd*|*launchd*) continue ;;
+        esac
+        if is_self_or_ancestor "$p" || is_descendant_of_self "$p"; then
+            continue
+        fi
+        /bin/echo "$p"
+    done | /usr/bin/sort -u
+}
+
+show_jail_processes() {
+    local pids=$1
+    local total shown p cmd
+    total=$(printf '%s\n' "$pids" | /usr/bin/wc -l | /usr/bin/tr -d ' ')
+    echo "warning: $total process(es) are using files in the jail:" >&2
+    shown=0
+    for p in $pids; do
+        [ "$shown" -ge 6 ] && break
+        cmd=$(/bin/ps -p "$p" -o comm= 2>/dev/null | /usr/bin/cut -c1-100)
+        printf '  %6s  %s\n' "$p" "$cmd" >&2
+        shown=$((shown + 1))
+    done
+}
+
+kill_jail_processes() {
+    local pids=$1
+    local p i alive
+    [ -n "$pids" ] || return 0
+    for p in $pids; do
+        /bin/kill -TERM "$p" 2>/dev/null || true
+    done
+    i=0
+    while [ "$i" -lt 20 ]; do
+        alive=0
+        for p in $pids; do
+            if /bin/kill -0 "$p" 2>/dev/null; then
+                alive=1
+            fi
+        done
+        [ "$alive" -eq 0 ] && break
+        /bin/sleep 0.1
+        i=$((i + 1))
+    done
+    for p in $pids; do
+        if /bin/kill -0 "$p" 2>/dev/null; then
+            /bin/kill -KILL "$p" 2>/dev/null || true
+        fi
+    done
+    /bin/sleep 0.2
+}
+
+stop_jail() {
+    force=${1:-0}
+
+    if [ ! -x /usr/sbin/lsof ]; then
+        echo "warning: lsof not found; cannot check processes using the jail" >&2
+    fi
+
+    pids=$(filter_jail_pids)
+    if [ -n "$pids" ]; then
+        show_jail_processes "$pids"
+        if [ "$force" -ne 1 ]; then
+            printf 'Kill these processes and continue? [y/N] ' >&2
+            IFS= read -r answer || answer=
+            case "$answer" in
+                y|Y|yes|YES) ;;
+                *)
+                    echo "stop cancelled; jail is still running" >&2
+                    return 1
+                    ;;
+            esac
+        fi
+        echo "closing processes using the jail ..."
+        kill_jail_processes "$pids" || true
+        pids=$(filter_jail_pids)
+        if [ -n "$pids" ]; then
+            echo "some processes are still using the jail:" >&2
+            show_jail_processes "$pids"
+            return 1
+        fi
+    fi
+
+    stop_authd
+    ok=0
+    umount_dev || ok=1
+    umount_jail_tmp || ok=1
+    if [ "$ok" -eq 0 ]; then
+        echo "stopped jail-authd; unmounted $ROOT/dev and tmpfs"
+    else
+        echo "jail-authd stopped, but unmount failed (busy?)" >&2
+        return 1
     fi
     return 0
 }
@@ -851,16 +990,19 @@ case "${1:-}" in
         set_password "$@"
         ;;
     stop)
-        stop_authd
-        ok=0
-        umount_dev || ok=1
-        umount_jail_tmp || ok=1
-        if [ "$ok" -eq 0 ]; then
-            echo "stopped jail-authd; unmounted $ROOT/dev and tmpfs"
-        else
-            echo "jail-authd stopped, but unmount failed (busy?)" >&2
-            exit 1
-        fi
+        shift
+        force=0
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -y|--yes) force=1 ;;
+                *)
+                    usage
+                    exit 1
+                    ;;
+            esac
+            shift
+        done
+        stop_jail "$force" || exit 1
         ;;
     *)
         usage
