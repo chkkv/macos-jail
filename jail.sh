@@ -82,6 +82,17 @@ umount_dev() {
     return 0
 }
 
+link_mdns() {
+    if [ ! -d "$ROOT/var/run" ]; then
+        return 0
+    fi
+    if [ -S /var/run/mDNSResponder ]; then
+        /bin/rm -f "$ROOT/var/run/mDNSResponder"
+        /bin/ln /var/run/mDNSResponder "$ROOT/var/run/mDNSResponder" 2>/dev/null || \
+            echo "warning: cannot hardlink mDNSResponder socket; DNS may fail" >&2
+    fi
+}
+
 pid_is_authd() {
     [ -n "${1:-}" ] || return 1
     cmd=$(/bin/ps -p "$1" -o command= 2>/dev/null || true)
@@ -223,7 +234,8 @@ build_jail() {
     /bin/rm -rf "$ROOT/bin" "$ROOT/usr" "$ROOT/etc" "$ROOT/System" \
                 "$ROOT/dev" "$ROOT/private" "$ROOT/var" "$ROOT/Users" \
                 "$ROOT/sbin" "$ROOT/opt" "$ROOT/tmp"
-    /bin/mkdir -p "$ROOT"/{bin,usr/bin,usr/sbin,usr/local/bin,usr/lib,System/Library/dyld,dev,etc,private/tmp,private/var/tmp,var/root,var/run,var/log,var/db/timezone,Users,usr/share/terminfo}
+    /bin/mkdir -p "$ROOT"/{bin,sbin,usr/bin,usr/sbin,usr/local/bin,usr/lib,System/Library/dyld,dev,etc,private/tmp,private/var/tmp,var/root,var/run,var/log,var/db/timezone,Users,usr/share/terminfo}
+    link_mdns
 
     # ---- bash: platform binaries are rejected in chroot, so ad-hoc sign ----
     /bin/cp /bin/bash "$ROOT/bin/bash"
@@ -291,6 +303,10 @@ build_jail() {
     copy_tool /usr/bin/true      usr/bin/true
     copy_tool /usr/bin/false     usr/bin/false
     copy_tool /usr/sbin/chown    usr/sbin/chown
+    copy_tool /sbin/ping         sbin/ping
+    copy_tool /usr/bin/curl      usr/bin/curl
+    copy_tool /usr/bin/nc        usr/bin/nc
+    copy_tool /usr/bin/nano      usr/bin/nano
 
     # ---- terminfo (for ls --color, stty, etc.) ----
     for e in x/xterm-256color x/xterm v/vt100 a/ansi s/screen s/screen-256color; do
@@ -319,6 +335,12 @@ build_jail() {
     } > "$ROOT/etc/group"
 
     echo "127.0.0.1 localhost" > "$ROOT/etc/hosts"
+    for f in /etc/services /etc/protocols /etc/ssl/cert.pem /etc/resolv.conf; do
+        if [ -f "$f" ]; then
+            /bin/mkdir -p "$ROOT$(/usr/bin/dirname "$f")"
+            /bin/cp -L "$f" "$ROOT$f"
+        fi
+    done
     {
         echo '# System-wide profile for the jail.'
         echo '# Per-user prompt is configured in ~/.profile and ~/.bashrc.'
@@ -425,6 +447,7 @@ start_jail() {
         echo "jail is not built; run: $0 build" >&2
         exit 1
     fi
+    link_mdns
     start_authd
     export JAIL_ROOT="$ROOT"
     if [ $# -eq 0 ]; then

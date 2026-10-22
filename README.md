@@ -105,10 +105,33 @@ bin usr etc System dev private var Users sbin opt tmp
   `ls cat cp mv rm mkdir rmdir ln chmod chown date df pwd sleep unlink expr
   realpath echo kill touch stat readlink head tail sort uniq cut tr wc grep
   sed awk find xargs id whoami uname du tar gzip env printenv mktemp
-  basename dirname tee cmp comm paste yes printf true false stty tty`
+  basename dirname tee cmp comm paste yes printf true false stty tty
+  ping curl nc nano`
 - 模拟 `sudo`/`su`（见下节），客户端位于 `/usr/local/bin`，不依赖 setuid。
 - terminfo、时区（Asia/Shanghai）已复制。
-- 约 16 MB。
+- 约 21 MB。
+
+## 网络工具
+
+- `ping`：`/sbin/ping`，宿主机上不是 setuid，jail 内以普通用户直接运行。
+- `curl`：`/usr/bin/curl`；HTTPS 使用 `/etc/ssl/cert.pem`。
+- `nc`：`/usr/bin/nc`。
+- `nano`：`/usr/bin/nano`。macOS 的 `nano` 实际是 `pico` 的符号链接；
+  如需 GNU nano 需要另外安装。
+- `/etc/services`、`/etc/protocols` 已复制。
+
+**DNS：**
+
+- macOS 不使用 `/etc/resolv.conf` 做实际解析。build 和每次 `start` 会把宿主的
+  `/var/run/mDNSResponder` Unix socket 硬链接到：
+  ```text
+  <rootfs>/var/run/mDNSResponder
+  ```
+- 因此 rootfs 必须和 `/var/run` 在同一个卷（通常 `~/`、`/private/tmp` 都在 Data 卷）。
+- 如果 rootfs 在外部卷，硬链接会失败并打印 warning，`curl`/`nc`/`ping` 的域名解析
+  可能失败；此时可用 IP、`curl --resolve`，或把 jail 放到 Data 卷。
+- mDNSResponder 重启后，下一次 `start` 会重新建立硬链接；长时间运行中如果 mDNS
+  重启，DNS 可能暂时失效。
 
 ## 模拟 su/sudo
 
