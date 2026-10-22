@@ -428,7 +428,8 @@ start_jail() {
     start_authd
     export JAIL_ROOT="$ROOT"
     if [ $# -eq 0 ]; then
-        exec "$LAUNCHER"
+        # No command: enter an interactive login shell.
+        exec "$LAUNCHER" /bin/bash -l
     fi
     exec "$LAUNCHER" /bin/bash -c "$*"
 }
