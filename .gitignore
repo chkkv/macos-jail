@@ -1,0 +1,15 @@
+/bin/
+/usr/
+/etc/
+/System/
+/dev/
+/private/
+/var/
+/Users/
+/sbin/
+/opt/
+/tmp/
+/jail-launcher
+/jail-authd
+/jail-passwd
+.DS_Store
