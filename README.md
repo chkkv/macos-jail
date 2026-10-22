@@ -308,9 +308,12 @@ sudo -S id              # 从 stdin 读密码（脚本用）
 
 ## 原理
 
-1. **bash 重签名**
-   macOS 27 的 AMFI 禁止在 chroot 中执行平台二进制。build 时复制 `/bin/bash`
-   并 `codesign --force --sign -`，使其成为 ad-hoc 签名副本。
+1. **平台二进制与签名**
+   macOS 26/27 的 AMFI 禁止在 chroot 中执行原始平台二进制，build 会对复制
+   的工具和 `/bin/bash` 执行 `codesign --force --sign -`。
+   macOS 15 及更早版本接受原始 Apple 签名；此时不要重新 ad-hoc 签名，
+   否则部分工具（例如 `/usr/bin/id`）可能在后续运行中被 SIGKILL
+   （`Killed: 9`），即使 `codesign --verify` 仍显示有效。
 
 2. **真实 dyld 缓存**
    不复制 2.4 GB 缓存。启动器在 `chroot()` 前打开 Preboot 卷里真实的、受 SIP

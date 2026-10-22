@@ -35,6 +35,8 @@ JAIL_UID=$(/usr/bin/id -u "$JAIL_USER")
 JAIL_GID=$(/usr/bin/id -g "$JAIL_USER")
 JAIL_GROUPS=$(/usr/bin/id -G "$JAIL_USER" | /usr/bin/tr ' ' ',')
 JAIL_GROUP_NAMES=$(/usr/bin/id -Gn "$JAIL_USER")
+HOST_OS_MAJOR=$(/usr/bin/sw_vers -productVersion 2>/dev/null |
+    /usr/bin/cut -d. -f1)
 
 # The current working directory IS the jail root.
 ROOT="$PWD"
@@ -354,8 +356,13 @@ copy_tool() {
     /bin/mkdir -p "$ROOT/$(/usr/bin/dirname "$dst")"
     /bin/cp -L "$src" "$ROOT/$dst" || return 1
     /bin/chmod 755 "$ROOT/$dst"
-    /usr/bin/codesign --force --sign - "$ROOT/$dst" >/dev/null 2>&1 || \
-        echo "warning: codesign failed for $dst" >&2
+    # macOS 15/older accepts the original Apple signatures. Re-signing
+    # platform tools ad-hoc makes some of them die with SIGKILL later
+    # (Killed: 9), even though codesign --verify still reports valid.
+    if [ "${HOST_OS_MAJOR:-0}" -ge 26 ]; then
+        /usr/bin/codesign --force --sign - "$ROOT/$dst" >/dev/null 2>&1 || \
+            echo "warning: codesign failed for $dst" >&2
+    fi
 }
 
 # ---- Command Line Tools ----------------------------------------------------
@@ -717,10 +724,15 @@ build_jail() {
     # installer) fail without this symlink.
     /bin/ln -sfn private/tmp "$ROOT/tmp"
 
-    # ---- bash: platform binaries are rejected in chroot, so ad-hoc sign ----
+    # ---- bash ----
+    # macOS 26+ rejects the copied platform binary in chroot unless re-signed.
+    # macOS 15 and older accept the original Apple signature; re-signing there
+    # makes some copied tools unstable (Killed: 9).
     /bin/cp /bin/bash "$ROOT/bin/bash"
     /bin/chmod 755 "$ROOT/bin/bash"
-    /usr/bin/codesign --force --sign - "$ROOT/bin/bash" >/dev/null
+    if [ "${HOST_OS_MAJOR:-0}" -ge 26 ]; then
+        /usr/bin/codesign --force --sign - "$ROOT/bin/bash" >/dev/null
+    fi
     /bin/ln -sfn bash "$ROOT/bin/sh"
 
     # ---- dyld (resolved inside the new root) ----
