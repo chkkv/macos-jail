@@ -283,6 +283,9 @@ setup_clt_in_jail() {
     /bin/mkdir -p "$ROOT/var/db" "$ROOT/usr/local/bin"
     /bin/ln -sfn /Library/Developer/CommandLineTools \
         "$ROOT/var/db/xcode_select_link"
+    if [ ! -e "$ROOT/tmp" ] && [ ! -L "$ROOT/tmp" ]; then
+        /bin/ln -s private/tmp "$ROOT/tmp"
+    fi
 
     # xcrun uses confstr(DARWIN_USER_TEMP_DIR), not TMPDIR, for its cache.
     tmpbase=${JAIL_TMPDIR:-}
@@ -542,6 +545,10 @@ build_jail() {
                 "$ROOT/dev" "$ROOT/private" "$ROOT/var" "$ROOT/Users" \
                 "$ROOT/sbin" "$ROOT/opt" "$ROOT/tmp" "$ROOT/Library"
     /bin/mkdir -p "$ROOT"/{bin,sbin,usr/bin,usr/sbin,usr/local/bin,usr/lib,System/Library/dyld,dev,etc,private/tmp,private/var/tmp,var/root,var/run,var/log,var/db/timezone,Users,usr/share/terminfo}
+    # Standard macOS layout. Bash 3.2 uses here-document temp files under
+    # /tmp; scripts that cd to a root-owned directory (e.g. Homebrew's
+    # installer) fail without this symlink.
+    /bin/ln -sfn private/tmp "$ROOT/tmp"
 
     # ---- bash: platform binaries are rejected in chroot, so ad-hoc sign ----
     /bin/cp /bin/bash "$ROOT/bin/bash"

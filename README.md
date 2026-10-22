@@ -196,9 +196,16 @@ brew install hello
 hello
 ```
 
-已知问题：部分 Homebrew 安装脚本末尾的 shell here-doc 可能报
-`cannot create temp file ... Permission denied`，但 CLT、portable Ruby
-和 `brew` 已经安装；上面的 `brew install hello` 可以正常完成。
+jail 内会创建标准 macOS 的 `/tmp -> private/tmp` 链接。Bash 3.2 的
+here-document 临时文件依赖 `/tmp`；Homebrew 安装脚本中途会 `cd /usr`，
+如果 `/tmp` 缺失，临时文件会落到 root 只读的 `/usr`，从而出现：
+
+```text
+cannot create temp file for here-document: Permission denied
+```
+
+`build` 和 `install-cmdlinetools` 都会确保该链接存在；补上后安装脚本可
+正常返回 0。
 
 ## 模拟 su/sudo
 
