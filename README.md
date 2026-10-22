@@ -64,6 +64,8 @@ cd ~/myjail
 <当前目录>/
 ├── bin/  usr/  etc/  System/  dev/  private/  var/  Users/   # rootfs
 │   ├── usr/local/bin/sudo  usr/local/bin/su                  # 模拟客户端
+│   ├── Users/<user>/.profile  Users/<user>/.bashrc           # 初始配置
+│   ├── var/root/.profile      var/root/.bashrc               # root 初始配置
 │   ├── var/run/jail-auth.sock                                # 运行时
 │   └── etc/jail-shadow                                       # 密码哈希
 ├── jail.sh
@@ -90,8 +92,11 @@ bin usr etc System dev private var Users sbin opt tmp
 - 使用 **macOS 自带命令行工具**，不包含 GNU coreutils。
 - jail 内用户与宿主机当前用户一致：名称、uid、主 gid、附加组都相同。
   - 当前环境：`chkkv` / uid 501 / gid 20
-  - jail 内 home：`/Users/chkkv`（空目录，属于 501:20）
+  - jail 内 home：`/Users/chkkv`（属于 501:20）
   - `/etc/passwd`、`/etc/group` 由 build 时检测到的用户信息生成。
+- build 会写入初始 `~/.profile` 和 `~/.bashrc`（jail 用户和 root 各一套）。
+  - PS1 在 build 时从宿主机当前用户的交互式 bash 捕获，保持本机样式。
+  - `.profile` 会 source `.bashrc`，login shell 和交互式 non-login shell 都能生效。
 - 启动后自动降权到该用户，`id`/`whoami` 与宿主机一致。
 - 包含的工具：
   `ls cat cp mv rm mkdir rmdir ln chmod chown date df pwd sleep unlink expr
@@ -189,6 +194,8 @@ sudo -S id              # 从 stdin 读密码（脚本用）
   请先退出 jail 再执行。
 - 修改 `jail-launcher.c` / `jail-auth.c` 后重新运行 `./jail.sh build`。
 - `build` 清除 `etc/`，因此容器密码会丢失，需要重新 `set-user-password`。
+- `build` 还会重建 `Users/` 和 `var/root`，home 下的 `.profile`、`.bashrc`
+  以及用户文件都会被重置。
 - macOS 大版本升级后如果 dyld 缓存路径变化，需要同步修改启动器里的
   `/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld`。
 - 旧版本在 `~/.macos-jail` 下的部署已不再使用，可以删除。

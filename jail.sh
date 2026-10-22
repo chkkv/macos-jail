@@ -193,6 +193,25 @@ copy_tool() {
         echo "warning: codesign failed for $dst" >&2
 }
 
+write_home_configs() {
+    home=$1
+    owner=$2
+    prompt=$3
+    {
+        echo '# Initial jail profile'
+        echo 'if [ -n "$BASH_VERSION" ] && [ -f "$HOME/.bashrc" ]; then'
+        echo '    . "$HOME/.bashrc"'
+        echo 'fi'
+    } > "$home/.profile"
+    {
+        echo '# Initial jail bashrc'
+        echo '# PS1 style captured from the host at build time'
+        printf 'PS1=%q\n' "$prompt"
+    } > "$home/.bashrc"
+    /usr/sbin/chown "$owner" "$home/.profile" "$home/.bashrc"
+    /bin/chmod 644 "$home/.profile" "$home/.bashrc"
+}
+
 build_jail() {
     stop_authd
     if ! umount_dev; then
@@ -300,7 +319,10 @@ build_jail() {
     } > "$ROOT/etc/group"
 
     echo "127.0.0.1 localhost" > "$ROOT/etc/hosts"
-    printf '%s\n' 'export PS1="jail:\w \$ "' > "$ROOT/etc/profile"
+    {
+        echo '# System-wide profile for the jail.'
+        echo '# Per-user prompt is configured in ~/.profile and ~/.bashrc.'
+    } > "$ROOT/etc/profile"
     if [ -f /etc/inputrc ]; then
         /bin/cp /etc/inputrc "$ROOT/etc/inputrc"
     fi
@@ -316,6 +338,22 @@ build_jail() {
     /bin/chmod 700 "$ROOT/Users/$JAIL_USER"
     /bin/chmod 700 "$ROOT/var/root"
     /bin/chmod 1777 "$ROOT/private/tmp" "$ROOT/private/var/tmp"
+
+    # ---- initial profile/bashrc using the host user's prompt style ----
+    host_ps1=$(/usr/bin/sudo -H -u "$JAIL_USER" /bin/bash -ic \
+        'printf "__PS1__%s__END__" "$PS1"' 2>/dev/null || true)
+    case "$host_ps1" in
+        *__PS1__*__END__*)
+            host_ps1=${host_ps1#*__PS1__}
+            host_ps1=${host_ps1%%__END__*}
+            ;;
+        *)
+            host_ps1='\h:\W \u\$ '
+            ;;
+    esac
+    [ -n "$host_ps1" ] || host_ps1='\h:\W \u\$ '
+    write_home_configs "$ROOT/Users/$JAIL_USER" "$JAIL_UID:$JAIL_GID" "$host_ps1"
+    write_home_configs "$ROOT/var/root" "0:0" "$host_ps1"
 
     # ---- timezone ----
     lt=$(/usr/bin/readlink /etc/localtime 2>/dev/null || true)
