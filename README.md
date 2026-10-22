@@ -67,6 +67,7 @@ cd ~/myjail
 │   ├── Users/<user>/.profile  Users/<user>/.bashrc           # 初始配置
 │   ├── var/root/.profile      var/root/.bashrc               # root 初始配置
 │   ├── var/run/jail-auth.sock                                # 运行时
+│   ├── var/run/mDNSResponder                                 # DNS 代理 socket
 │   └── etc/jail-shadow                                       # 密码哈希
 ├── jail.sh
 ├── jail-launcher.c
@@ -122,16 +123,20 @@ bin usr etc System dev private var Users sbin opt tmp
 
 **DNS：**
 
-- macOS 不使用 `/etc/resolv.conf` 做实际解析。build 和每次 `start` 会把宿主的
-  `/var/run/mDNSResponder` Unix socket 硬链接到：
+- macOS 不使用 `/etc/resolv.conf` 做实际解析。
+- `jail-authd` 在：
   ```text
   <rootfs>/var/run/mDNSResponder
   ```
-- 因此 rootfs 必须和 `/var/run` 在同一个卷（通常 `~/`、`/private/tmp` 都在 Data 卷）。
-- 如果 rootfs 在外部卷，硬链接会失败并打印 warning，`curl`/`nc`/`ping` 的域名解析
-  可能失败；此时可用 IP、`curl --resolve`，或把 jail 放到 Data 卷。
-- mDNSResponder 重启后，下一次 `start` 会重新建立硬链接；长时间运行中如果 mDNS
-  重启，DNS 可能暂时失效。
+  创建一个 Unix socket，把连接**双向转发**到宿主：
+  ```text
+  /var/run/mDNSResponder
+  ```
+- 转发同时保留 `SCM_RIGHTS` ancillary fd（mDNSResponder 用它传 reply socket），
+  所以不是普通字节流代理。
+- 因此**不需要硬链接，也不要求 rootfs 与 `/var/run` 同卷**；外部卷也可以。
+- daemon 必须运行：`start` 启动它，`stop` 停止并删除代理 socket。
+- mDNSResponder 重启后，新连接会自动连到新的宿主 socket，不需要重建链接。
 
 ## 模拟 su/sudo
 

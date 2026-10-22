@@ -82,17 +82,6 @@ umount_dev() {
     return 0
 }
 
-link_mdns() {
-    if [ ! -d "$ROOT/var/run" ]; then
-        return 0
-    fi
-    if [ -S /var/run/mDNSResponder ]; then
-        /bin/rm -f "$ROOT/var/run/mDNSResponder"
-        /bin/ln /var/run/mDNSResponder "$ROOT/var/run/mDNSResponder" 2>/dev/null || \
-            echo "warning: cannot hardlink mDNSResponder socket; DNS may fail" >&2
-    fi
-}
-
 pid_is_authd() {
     [ -n "${1:-}" ] || return 1
     cmd=$(/bin/ps -p "$1" -o command= 2>/dev/null || true)
@@ -130,7 +119,8 @@ stop_authd() {
             /bin/sleep 0.1
         done
     done
-    /bin/rm -f "$AUTH_PID" "$AUTH_SOCK" "$ROOT/var/run/jail-authd.lock"
+    /bin/rm -f "$AUTH_PID" "$AUTH_SOCK" "$ROOT/var/run/mDNSResponder" \
+                "$ROOT/var/run/jail-authd.lock"
 }
 
 start_authd() {
@@ -235,7 +225,6 @@ build_jail() {
                 "$ROOT/dev" "$ROOT/private" "$ROOT/var" "$ROOT/Users" \
                 "$ROOT/sbin" "$ROOT/opt" "$ROOT/tmp"
     /bin/mkdir -p "$ROOT"/{bin,sbin,usr/bin,usr/sbin,usr/local/bin,usr/lib,System/Library/dyld,dev,etc,private/tmp,private/var/tmp,var/root,var/run,var/log,var/db/timezone,Users,usr/share/terminfo}
-    link_mdns
 
     # ---- bash: platform binaries are rejected in chroot, so ad-hoc sign ----
     /bin/cp /bin/bash "$ROOT/bin/bash"
@@ -447,7 +436,6 @@ start_jail() {
         echo "jail is not built; run: $0 build" >&2
         exit 1
     fi
-    link_mdns
     start_authd
     export JAIL_ROOT="$ROOT"
     if [ $# -eq 0 ]; then

@@ -605,6 +605,155 @@ out:
     memset(password, 0, sizeof(password));
 }
 
+static int setup_mdns_proxy(const char *root) {
+    char path[PATH_MAX];
+    struct sockaddr_un sa;
+    int fd;
+
+    snprintf(path, sizeof(path), "%s/var/run/mDNSResponder", root);
+    unlink(path);
+    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        perror("mdns socket");
+        return -1;
+    }
+    memset(&sa, 0, sizeof(sa));
+    sa.sun_family = AF_UNIX;
+    strncpy(sa.sun_path, path, sizeof(sa.sun_path) - 1);
+    if (bind(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+        perror("mdns bind");
+        close(fd);
+        return -1;
+    }
+    chmod(path, 0666);
+    if (listen(fd, 16) != 0) {
+        perror("mdns listen");
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+static void close_rights(struct msghdr *m) {
+    struct cmsghdr *cm;
+    for (cm = CMSG_FIRSTHDR(m); cm != NULL; cm = CMSG_NXTHDR(m, cm)) {
+        if (cm->cmsg_level == SOL_SOCKET && cm->cmsg_type == SCM_RIGHTS &&
+            cm->cmsg_len >= CMSG_LEN(0)) {
+            size_t n = (cm->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+            int *fds = (int *)CMSG_DATA(cm);
+            for (size_t i = 0; i < n; i++) close(fds[i]);
+        }
+    }
+}
+
+static void relay_fds(int a, int b) {
+    char buf[16384];
+    int open_a = 1, open_b = 1;
+    struct pollfd p[2];
+
+    while (open_a || open_b) {
+        p[0].fd = open_a ? a : -1;
+        p[0].events = POLLIN;
+        p[0].revents = 0;
+        p[1].fd = open_b ? b : -1;
+        p[1].events = POLLIN;
+        p[1].revents = 0;
+        int r = poll(p, 2, -1);
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        for (int side = 0; side < 2; side++) {
+            int src, dst;
+            int *open_src;
+            if (side == 0) {
+                src = a; dst = b; open_src = &open_a;
+            } else {
+                src = b; dst = a; open_src = &open_b;
+            }
+            if (!*open_src || !(p[side].revents & (POLLIN | POLLHUP | POLLERR)))
+                continue;
+
+            struct iovec iov;
+            struct msghdr in;
+            char cbuf[CMSG_SPACE(sizeof(int) * 16)];
+            char outcbuf[CMSG_SPACE(sizeof(int) * 16)];
+            size_t outlen = 0;
+
+            iov.iov_base = buf;
+            iov.iov_len = sizeof(buf);
+            memset(&in, 0, sizeof(in));
+            in.msg_iov = &iov;
+            in.msg_iovlen = 1;
+            in.msg_control = cbuf;
+            in.msg_controllen = sizeof(cbuf);
+            ssize_t n = recvmsg(src, &in, 0);
+            if (n <= 0) {
+                *open_src = 0;
+                shutdown(dst, SHUT_WR);
+                continue;
+            }
+
+            /* Forward only SCM_RIGHTS. mDNSResponder uses it to pass the
+               client's reply socket. */
+            struct cmsghdr *cm;
+            for (cm = CMSG_FIRSTHDR(&in); cm != NULL; cm = CMSG_NXTHDR(&in, cm)) {
+                size_t aligned = (cm->cmsg_len + 3) & ~(size_t)3;
+                if (cm->cmsg_level == SOL_SOCKET && cm->cmsg_type == SCM_RIGHTS &&
+                    cm->cmsg_len >= CMSG_LEN(0) &&
+                    outlen + aligned <= sizeof(outcbuf)) {
+                    memcpy(outcbuf + outlen, cm, cm->cmsg_len);
+                    outlen += aligned;
+                }
+            }
+
+            struct iovec oiov;
+            struct msghdr out;
+            oiov.iov_base = buf;
+            oiov.iov_len = (size_t)n;
+            memset(&out, 0, sizeof(out));
+            out.msg_iov = &oiov;
+            out.msg_iovlen = 1;
+            if (outlen > 0) {
+                out.msg_control = outcbuf;
+                out.msg_controllen = outlen;
+            }
+            ssize_t sent = sendmsg(dst, &out, 0);
+            if (sent < 0) {
+                close_rights(&in);
+                return;
+            }
+            if ((size_t)sent < (size_t)n)
+                write_full(dst, buf + sent, (size_t)n - (size_t)sent);
+            close_rights(&in);
+            if (in.msg_flags & MSG_CTRUNC)
+                return;
+        }
+    }
+}
+
+static void mdns_proxy(int client) {
+    int up;
+    struct sockaddr_un sa;
+
+    up = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (up < 0) {
+        close(client);
+        return;
+    }
+    memset(&sa, 0, sizeof(sa));
+    sa.sun_family = AF_UNIX;
+    strncpy(sa.sun_path, "/var/run/mDNSResponder", sizeof(sa.sun_path) - 1);
+    if (connect(up, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+        close(up);
+        close(client);
+        return;
+    }
+    relay_fds(client, up);
+    close(up);
+    close(client);
+}
+
 static int acquire_daemon_lock(const char *root) {
     char path[PATH_MAX];
     int fd;
@@ -628,7 +777,7 @@ static int acquire_daemon_lock(const char *root) {
 static int run_daemon(int argc, char **argv) {
     const char *root = NULL, *sock = NULL, *shadow = NULL;
     int uid = -1, gid = -1;
-    int l, c;
+    int l, c, mdns_l;
     struct sockaddr_un sa;
     struct rate_state *rate;
 
@@ -661,6 +810,11 @@ static int run_daemon(int argc, char **argv) {
         return 1;
 
     signal(SIGPIPE, SIG_IGN);
+
+    mdns_l = setup_mdns_proxy(root);
+    if (mdns_l < 0)
+        fprintf(stderr, "warning: mDNS proxy socket unavailable\n");
+
     l = socket(AF_UNIX, SOCK_STREAM, 0);
     if (l < 0) { perror("socket"); return 1; }
     memset(&sa, 0, sizeof(sa));
@@ -678,23 +832,57 @@ static int run_daemon(int argc, char **argv) {
                 MAP_SHARED | MAP_ANON, -1, 0);
     if (rate == MAP_FAILED) rate = NULL;
 
+    struct pollfd pfds[2];
+    int nfds = 1;
+    pfds[0].fd = l;
+    pfds[0].events = POLLIN;
+    if (mdns_l >= 0) {
+        pfds[1].fd = mdns_l;
+        pfds[1].events = POLLIN;
+        nfds = 2;
+    }
+
     for (;;) {
-        c = accept(l, NULL, NULL);
-        if (c < 0) {
+        pfds[0].revents = 0;
+        if (nfds > 1)
+            pfds[1].revents = 0;
+        int pr = poll(pfds, (nfds_t)nfds, -1);
+        if (pr < 0) {
             if (errno == EINTR) continue;
-            perror("accept");
-            sleep(1);
-            continue;
+            perror("poll");
+            break;
         }
-        pid_t pid = fork();
-        if (pid == 0) {
-            close(l);
-            handle_client(c, root, shadow, (uid_t)uid, rate);
-            _exit(0);
+        if (pfds[0].revents & POLLIN) {
+            c = accept(l, NULL, NULL);
+            if (c >= 0) {
+                pid_t pid = fork();
+                if (pid == 0) {
+                    close(l);
+                    if (mdns_l >= 0) close(mdns_l);
+                    handle_client(c, root, shadow, (uid_t)uid, rate);
+                    _exit(0);
+                }
+                close(c);
+            }
         }
-        close(c);
+        if (nfds > 1 && (pfds[1].revents & POLLIN)) {
+            c = accept(mdns_l, NULL, NULL);
+            if (c >= 0) {
+                pid_t pid = fork();
+                if (pid == 0) {
+                    close(l);
+                    close(mdns_l);
+                    mdns_proxy(c);
+                    _exit(0);
+                }
+                close(c);
+            }
+        }
         while (waitpid(-1, NULL, WNOHANG) > 0) {}
     }
+    close(l);
+    if (mdns_l >= 0) close(mdns_l);
+    return 0;
 }
 
 /* ------------------------------------------------------------------ */
