@@ -153,6 +153,22 @@ int main(int argc, char **argv) {
     }
 
     setenv("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", 1);
+    setenv("TMPDIR", "/private/tmp", 1);
+    setenv("TMP", "/private/tmp", 1);
+    setenv("TEMP", "/private/tmp", 1);
+    if (access("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk", F_OK) == 0) {
+        setenv("DEVELOPER_DIR", "/Library/Developer/CommandLineTools", 1);
+        setenv("SDKROOT",
+               "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk", 1);
+    }
+    if (access("/Library/Developer/CommandLineTools/usr/libexec/git-core",
+               F_OK) == 0) {
+        setenv("GIT_EXEC_PATH",
+               "/Library/Developer/CommandLineTools/usr/libexec/git-core", 1);
+        setenv("GIT_TEMPLATE_DIR",
+               "/Library/Developer/CommandLineTools/usr/share/git-core/templates",
+               1);
+    }
 
     if (argc < 2) {
         char *args[] = { "/bin/bash", "-l", NULL };

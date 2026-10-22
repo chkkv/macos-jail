@@ -39,6 +39,7 @@ cd ~/myjail
 
 ```sh
 ./jail.sh build                       # 在当前目录部署/重建 rootfs
+./jail.sh install-cmdlinetools        # 安装 Apple Command Line Tools
 ./jail.sh set-user-password           # 交互设置容器密码
 ./jail.sh set-user-password 'secret'  # 直接设置容器密码
 ./jail.sh set-user-password --clear   # 清除密码，禁用 su/sudo
@@ -81,7 +82,7 @@ cd ~/myjail
 `build` 只替换 rootfs 自己的目录：
 
 ```text
-bin usr etc System dev private var Users sbin opt tmp
+bin usr etc System dev private var Users sbin opt tmp Library
 ```
 
 `jail.sh`、`jail-launcher.c`、`jail-auth.c`、`jail-launcher`、
@@ -110,7 +111,7 @@ bin usr etc System dev private var Users sbin opt tmp
   ping curl nc nano`
 - 模拟 `sudo`/`su`（见下节），客户端位于 `/usr/local/bin`，不依赖 setuid。
 - terminfo、时区（Asia/Shanghai）已复制。
-- 约 21 MB。
+- 基础 rootfs 约 21 MB；安装 Command Line Tools 后约 1.3 GB。
 
 ## 网络工具
 
@@ -137,6 +138,67 @@ bin usr etc System dev private var Users sbin opt tmp
 - 因此**不需要硬链接，也不要求 rootfs 与 `/var/run` 同卷**；外部卷也可以。
 - daemon 必须运行：`start` 启动它，`stop` 停止并删除代理 socket。
 - mDNSResponder 重启后，新连接会自动连到新的宿主 socket，不需要重建链接。
+
+## Command Line Tools
+
+jail 默认只有 macOS 自带的基础工具，没有 `clang`、`make`、`git`。安装：
+
+```sh
+./jail.sh install-cmdlinetools
+```
+
+行为：
+
+- 先检查宿主机的 `/Library/Developer/CommandLineTools`。
+- 存在时直接复制进 jail 的同一路径（约 1.3 GB，APFS 上通常很快）。
+- 不存在时通过 Apple Software Update 查找并下载当前系统可用的 CLT。
+- 同时安装 `xcode-select`、`xcrun`、`pkgutil`、`sw_vers` 等 Homebrew
+  会检查的系统工具，并复制 CLT receipts 和 `SystemVersion.plist`。
+- 在 `/usr/local/bin` 建立 `clang`、`make`、`git` 等入口；`git` 是包装脚本，
+  会显式设置 `GIT_EXEC_PATH`，避免 `remote-https` helper 丢失。
+- launcher 会在检测到 CLT 后设置 `SDKROOT`、`DEVELOPER_DIR`、`TMPDIR`。
+
+`build` 会删除 `Library/`，因此重新 build 后需要再次运行
+`install-cmdlinetools`。
+
+## Homebrew
+
+CLT 安装后可以安装 Homebrew。国内环境可以同时使用 USTC 和本地代理；
+下面示例代理为 `127.0.0.1:10809`：
+
+```sh
+export http_proxy="http://127.0.0.1:10809"
+export https_proxy="$http_proxy"
+export HTTP_PROXY="$http_proxy"
+export HTTPS_PROXY="$http_proxy"
+export ALL_PROXY="$http_proxy"
+export all_proxy="$http_proxy"
+export no_proxy="localhost,127.0.0.1"
+
+export HOMEBREW_BREW_GIT_REMOTE="https://mirrors.ustc.edu.cn/brew.git"
+export HOMEBREW_API_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles/api"
+
+# 不要设置 HOMEBREW_BOTTLE_DOMAIN：USTC 的 legacy flat 镜像没有
+# portable-ruby，留空让 portable Ruby 走官方 GHCR（可通过代理）。
+unset HOMEBREW_BOTTLE_DOMAIN
+unset HOMEBREW_ARTIFACT_DOMAIN
+
+/bin/bash -c "$(curl -fsSL https://mirrors.ustc.edu.cn/misc/brew-install.sh)"
+eval "$(/opt/homebrew/bin/brew shellenv)"
+```
+
+验证：
+
+```sh
+brew --version
+brew config
+brew install hello
+hello
+```
+
+已知问题：部分 Homebrew 安装脚本末尾的 shell here-doc 可能报
+`cannot create temp file ... Permission denied`，但 CLT、portable Ruby
+和 `brew` 已经安装；上面的 `brew install hello` 可以正常完成。
 
 ## 模拟 su/sudo
 
@@ -227,6 +289,8 @@ sudo -S id              # 从 stdin 读密码（脚本用）
 - `build` 清除 `etc/`，因此容器密码会丢失，需要重新 `set-user-password`。
 - `build` 还会重建 `Users/` 和 `var/root`，home 下的 `.profile`、`.bashrc`
   以及用户文件都会被重置。
+- `build` 会删除 `Library/`；重新 build 后需再次运行
+  `install-cmdlinetools`。
 - macOS 大版本升级后如果 dyld 缓存路径变化，需要同步修改启动器里的
   `/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld`。
 - 旧版本在 `~/.macos-jail` 下的部署已不再使用，可以删除。
