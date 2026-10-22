@@ -788,12 +788,17 @@ build_jail() {
     copy_tool /usr/bin/nc        usr/bin/nc
     copy_tool /usr/bin/nano      usr/bin/nano
 
-    # ---- terminfo (for ls --color, stty, etc.) ----
-    for e in x/xterm-256color x/xterm v/vt100 a/ansi s/screen s/screen-256color; do
-        if [ -f "/usr/share/terminfo/$e" ]; then
-            /bin/mkdir -p "$ROOT/usr/share/terminfo/$(/usr/bin/dirname "$e")"
-            /bin/cp "/usr/share/terminfo/$e" "$ROOT/usr/share/terminfo/$e"
-        fi
+    # ---- terminfo (for nano/pico, ls --color, stty, etc.) ----
+    # macOS terminfo uses hashed subdirectories, e.g.
+    # /usr/share/terminfo/78/xterm-256color. Find entries by name instead
+    # of assuming the old x/xterm-256color layout.
+    for name in xterm-256color xterm vt100 ansi screen screen-256color; do
+        src=$(/usr/bin/find /usr/share/terminfo -type f -name "$name" \
+            -print 2>/dev/null | /usr/bin/head -n 1)
+        [ -n "$src" ] || continue
+        rel=${src#/usr/share/terminfo/}
+        /bin/mkdir -p "$ROOT/usr/share/terminfo/$(/usr/bin/dirname "$rel")"
+        /bin/cp -L "$src" "$ROOT/usr/share/terminfo/$rel"
     done
 
     # ---- users / groups: same name, uid, gid as the invoking user ----
