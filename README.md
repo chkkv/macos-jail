@@ -45,7 +45,8 @@ cd ~/myjail
 ./jail.sh set-user-password --clear   # 清除密码，禁用 su/sudo
 ./jail.sh start                       # 进入交互式 jail（bash -l）
 ./jail.sh start 'id; ls -la /'        # 在 jail 内执行 shell 命令
-./jail.sh stop                        # 停止 jail-authd 并卸载 devfs
+JAIL_TMPFS_SIZE=2g ./jail.sh start    # 指定 /tmp tmpfs 大小
+./jail.sh stop                        # 停止 jail-authd，卸载 devfs 和 tmpfs
 ```
 
 `build`、`start`、`set-user-password`、`stop` 需要 root，脚本会自动通过 `sudo` 重新执行。
@@ -112,6 +113,32 @@ bin usr etc System dev private var Users sbin opt tmp Library
 - 模拟 `sudo`/`su`（见下节），客户端位于 `/usr/local/bin`，不依赖 setuid。
 - terminfo、时区（Asia/Shanghai）已复制。
 - 基础 rootfs 约 21 MB；安装 Command Line Tools 后约 1.3 GB。
+
+## 临时目录
+
+`start` 会用 macOS 的 `mount_tmpfs` 把：
+
+```text
+<rootfs>/private/tmp
+```
+
+挂载成一个新的内存文件系统，并保留标准链接：
+
+```text
+/tmp -> private/tmp
+```
+
+因此 jail 内的 `/tmp` 就是 tmpfs，不再写入 rootfs 所在的 APFS 卷。
+
+- 默认大小：`1g`
+- 可用 `JAIL_TMPFS_SIZE` 覆盖，例如：
+  ```sh
+  JAIL_TMPFS_SIZE=2g ./jail.sh start
+  ```
+- `stop` 和 `build` 会卸载 tmpfs；如果 jail 内仍有进程打开 `/tmp` 文件，
+  卸载会 busy 并报错，需要先退出这些进程。
+- `start` 多次调用会复用已有的 tmpfs；`stop` 后再 `start` 会得到新的空 tmpfs。
+- 挂载需要 macOS 的 `mount_tmpfs`（macOS 11+）。
 
 ## 网络工具
 
@@ -196,7 +223,8 @@ brew install hello
 hello
 ```
 
-jail 内会创建标准 macOS 的 `/tmp -> private/tmp` 链接。Bash 3.2 的
+jail 内会创建标准 macOS 的 `/tmp -> private/tmp` 链接；`start` 时
+`private/tmp` 会挂载为 tmpfs。Bash 3.2 的
 here-document 临时文件依赖 `/tmp`；Homebrew 安装脚本中途会 `cd /usr`，
 如果 `/tmp` 缺失，临时文件会落到 root 只读的 `/usr`，从而出现：
 
@@ -236,7 +264,7 @@ sudo -S id              # 从 stdin 读密码（脚本用）
 - 重复执行 `start` 时，同一 rootfs 只会有一个 `jail-authd`：
   脚本复用存活 PID，daemon 自身还有 `fcntl` 写锁；并发启动时落败的一方
   会退出，脚本随后复用胜者的 PID。
-- `stop` 会停止 `jail-authd` 并卸载 devfs。
+- `stop` 会停止 `jail-authd`，并卸载 devfs 与 tmpfs。
 - 密码错误会逐步退避（1s/2s/4s…，上限 30s）。
 - 非 PTY 命令通过 fd 传递 stdio；交互式命令/`su` 使用 PTY relay，
   因此 `vim`、`top`、`less` 这类终端程序（需自行加入 jail）可以工作。
@@ -290,8 +318,8 @@ sudo -S id              # 从 stdin 读密码（脚本用）
 - jail 内 home 是独立空目录，不是宿主机的 `/Users/chkkv`。
 - `df` 可能打印 `getattrlist failed for /System/Volumes/Data`，但结果仍可用；
   这是 chroot 中缺少该挂载点导致的。
-- `stop` 会先停止 `jail-authd`；如果 jail 内仍有进程，devfs 卸载会 busy，
-  请先退出 jail 再执行。
+- `stop` 会先停止 `jail-authd`；如果 jail 内仍有进程，devfs 或 tmpfs 卸载会
+  busy，请先退出 jail 再执行。
 - 修改 `jail-launcher.c` / `jail-auth.c` 后重新运行 `./jail.sh build`。
 - `build` 清除 `etc/`，因此容器密码会丢失，需要重新 `set-user-password`。
 - `build` 还会重建 `Users/` 和 `var/root`，home 下的 `.profile`、`.bashrc`

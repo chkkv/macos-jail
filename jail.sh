@@ -83,6 +83,30 @@ umount_dev() {
     return 0
 }
 
+is_tmpfs_mounted() {
+    /sbin/mount | /usr/bin/grep -Fq " on $ROOT/private/tmp (tmpfs"
+}
+
+mount_jail_tmp() {
+    /bin/mkdir -p "$ROOT/private/tmp" || return 1
+    if is_tmpfs_mounted; then
+        return 0
+    fi
+    size=${JAIL_TMPFS_SIZE:-1g}
+    if ! /sbin/mount_tmpfs -s "$size" "$ROOT/private/tmp"; then
+        echo "cannot mount tmpfs at $ROOT/private/tmp" >&2
+        return 1
+    fi
+    /bin/chmod 1777 "$ROOT/private/tmp" 2>/dev/null || true
+}
+
+umount_jail_tmp() {
+    if is_tmpfs_mounted; then
+        /sbin/umount "$ROOT/private/tmp" || return 1
+    fi
+    return 0
+}
+
 pid_is_authd() {
     [ -n "${1:-}" ] || return 1
     cmd=$(/bin/ps -p "$1" -o command= 2>/dev/null || true)
@@ -539,6 +563,10 @@ build_jail() {
         echo "cannot unmount $ROOT/dev (jail still in use?)" >&2
         exit 1
     fi
+    if ! umount_jail_tmp; then
+        echo "cannot unmount $ROOT/private/tmp (jail still in use?)" >&2
+        exit 1
+    fi
     # Replace only rootfs-owned entries. Keep jail.sh, jail-launcher.c,
     # jail-auth.c, jail-launcher, README.md, .git, etc. in the current directory.
     /bin/rm -rf "$ROOT/bin" "$ROOT/usr" "$ROOT/etc" "$ROOT/System" \
@@ -760,6 +788,7 @@ start_jail() {
         echo "jail is not built; run: $0 build" >&2
         exit 1
     fi
+    mount_jail_tmp || exit 1
     start_authd
     export JAIL_ROOT="$ROOT"
     if [ $# -eq 0 ]; then
@@ -823,8 +852,11 @@ case "${1:-}" in
         ;;
     stop)
         stop_authd
-        if umount_dev; then
-            echo "stopped jail-authd; unmounted $ROOT/dev"
+        ok=0
+        umount_dev || ok=1
+        umount_jail_tmp || ok=1
+        if [ "$ok" -eq 0 ]; then
+            echo "stopped jail-authd; unmounted $ROOT/dev and tmpfs"
         else
             echo "jail-authd stopped, but unmount failed (busy?)" >&2
             exit 1
