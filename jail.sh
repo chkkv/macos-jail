@@ -799,6 +799,68 @@ build_jail() {
     copy_tool /usr/bin/curl      usr/bin/curl
     copy_tool /usr/bin/nc        usr/bin/nc
     copy_tool /usr/bin/nano      usr/bin/nano
+    copy_tool /usr/sbin/sysctl   usr/sbin/sysctl
+
+    # ---- nproc: macOS has no GNU nproc; wrap sysctl ----
+    cat > "$ROOT/usr/local/bin/nproc" <<'EOF'
+#!/bin/sh
+all=0
+ignore=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --all)
+            all=1
+            ;;
+        --ignore=*)
+            ignore=${1#*=}
+            ;;
+        --ignore)
+            shift
+            [ $# -gt 0 ] || { echo "nproc: --ignore requires a number" >&2; exit 1; }
+            ignore=$1
+            ;;
+        --help)
+            echo "Usage: nproc [OPTION]..."
+            echo "Print the number of processing units available."
+            echo "  --all           print the number of installed processors"
+            echo "  --ignore=N      exclude N processing units"
+            exit 0
+            ;;
+        --version)
+            echo "nproc (jail) 1.0"
+            exit 0
+            ;;
+        *)
+            echo "nproc: unrecognized option '$1'" >&2
+            exit 1
+            ;;
+    esac
+    shift
+done
+case "$ignore" in
+    ''|*[!0-9]*)
+        echo "nproc: invalid ignore value" >&2
+        exit 1
+        ;;
+esac
+total=$(/usr/sbin/sysctl -n hw.logicalcpu 2>/dev/null) ||
+    total=$(/usr/sbin/sysctl -n hw.ncpu 2>/dev/null)
+if [ -z "$total" ]; then
+    echo "nproc: cannot determine processor count" >&2
+    exit 1
+fi
+if [ "$all" -eq 1 ]; then
+    n=$total
+else
+    n=$(/usr/sbin/sysctl -n hw.activecpu 2>/dev/null) || n=$total
+fi
+[ -n "$n" ] || n=$total
+n=$((n - ignore))
+[ "$n" -lt 1 ] && n=1
+echo "$n"
+EOF
+    /bin/chmod 755 "$ROOT/usr/local/bin/nproc"
+    /usr/sbin/chown root:wheel "$ROOT/usr/local/bin/nproc"
 
     # ---- terminfo (for nano/pico, ls --color, stty, etc.) ----
     # macOS terminfo uses hashed subdirectories, e.g.

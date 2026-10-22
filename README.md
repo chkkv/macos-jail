@@ -110,7 +110,7 @@ bin usr etc System dev private var Users sbin opt tmp Library
   realpath echo kill touch stat readlink head tail sort uniq cut tr wc grep
   sed awk find xargs id whoami uname du tar gzip env printenv mktemp
   basename dirname tee cmp comm paste yes printf true false stty tty
-  ping curl nc nano`
+  ping curl nc nano nproc`
 - 模拟 `sudo`/`su`（见下节），客户端位于 `/usr/local/bin`，不依赖 setuid。
 - terminfo、时区（Asia/Shanghai）已复制。
 - 基础 rootfs 约 21 MB；安装 Command Line Tools 后约 1.3 GB。
