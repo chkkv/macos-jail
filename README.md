@@ -97,6 +97,9 @@ bin usr etc System dev private var Users sbin opt tmp
 - build 会写入初始 `~/.profile` 和 `~/.bashrc`（jail 用户和 root 各一套）。
   - PS1 在 build 时从宿主机当前用户的交互式 bash 捕获，保持本机样式。
   - `.profile` 会 source `.bashrc`，login shell 和交互式 non-login shell 都能生效。
+- 进入 jail 的初始 cwd 是 jail 用户的 home（由 launcher 设置，**不写入 `.profile`**）。
+  - `jail.sh start` 和 `jail.sh start '<command>'` 都从 home 开始。
+  - 之后在 `/`、`/private/tmp` 等目录执行 `bash -l` 不会被强制切回家。
 - 启动后自动降权到该用户，`id`/`whoami` 与宿主机一致。
 - 包含的工具：
   `ls cat cp mv rm mkdir rmdir ln chmod chown date df pwd sleep unlink expr

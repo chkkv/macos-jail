@@ -112,7 +112,20 @@ int main(int argc, char **argv) {
         fclose(f);
     }
 
-    if (n >= 3 && uid != 0) {
+    int have_user = (n >= 3 && uid != 0);
+    char home[128];
+    if (have_user)
+        snprintf(home, sizeof(home), "/Users/%s", user);
+    else
+        snprintf(home, sizeof(home), "/var/root");
+
+    /* Initial cwd for the jail entry is the user's home. This is done here
+       (not in ~/.profile) so a later `bash -l` run from another directory
+       keeps its own cwd. */
+    if (chdir(home) != 0)
+        chdir("/");
+
+    if (have_user) {
         gid_t groups[64];
         int ng = 0;
         if (n >= 4 && strcmp(groupbuf, "-") != 0) {
@@ -132,8 +145,6 @@ int main(int argc, char **argv) {
             perror("setuid");
             return 1;
         }
-        char home[128];
-        snprintf(home, sizeof(home), "/Users/%s", user);
         setenv("HOME", home, 1);
         setenv("USER", user, 1);
         setenv("LOGNAME", user, 1);
