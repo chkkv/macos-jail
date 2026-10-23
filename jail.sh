@@ -63,7 +63,7 @@ EOF
 }
 
 # Refuse obviously dangerous targets. The build replaces
-# bin/usr/etc/System/dev/private/var/Users/Library in the current directory.
+# bin/usr/etc/System/dev/private/var/opt/Library in the current directory.
 case "$ROOT" in
     /|/System|/Users|/private|/private/tmp|/private/var|/tmp|"$JAIL_HOME")
         echo "refusing to use $ROOT as the jail root" >&2
@@ -688,19 +688,27 @@ write_home_configs() {
     home=$1
     owner=$2
     prompt=$3
-    {
-        echo '# Initial jail profile'
-        echo 'if [ -n "$BASH_VERSION" ] && [ -f "$HOME/.bashrc" ]; then'
-        echo '    . "$HOME/.bashrc"'
-        echo 'fi'
-    } > "$home/.profile"
-    {
-        echo '# Initial jail bashrc'
-        echo '# PS1 style captured from the host at build time'
-        printf 'PS1=%q\n' "$prompt"
-    } > "$home/.bashrc"
-    /usr/sbin/chown "$owner" "$home/.profile" "$home/.bashrc"
-    /bin/chmod 644 "$home/.profile" "$home/.bashrc"
+    # Users/ is preserved across rebuilds, so never overwrite existing
+    # dotfiles: only write the initial versions when they are missing.
+    if [ ! -e "$home/.profile" ]; then
+        {
+            echo '# Initial jail profile'
+            echo 'if [ -n "$BASH_VERSION" ] && [ -f "$HOME/.bashrc" ]; then'
+            echo '    . "$HOME/.bashrc"'
+            echo 'fi'
+        } > "$home/.profile"
+        /usr/sbin/chown "$owner" "$home/.profile"
+        /bin/chmod 644 "$home/.profile"
+    fi
+    if [ ! -e "$home/.bashrc" ]; then
+        {
+            echo '# Initial jail bashrc'
+            echo '# PS1 style captured from the host at build time'
+            printf 'PS1=%q\n' "$prompt"
+        } > "$home/.bashrc"
+        /usr/sbin/chown "$owner" "$home/.bashrc"
+        /bin/chmod 644 "$home/.bashrc"
+    fi
 }
 
 build_jail() {
@@ -715,10 +723,12 @@ build_jail() {
     fi
     # Replace only rootfs-owned entries. Keep jail.sh, jail-launcher.c,
     # jail-auth.c, jail-launcher, README.md, .git, etc. in the current directory.
+    # Keep Users/ and opt/: user files, home directories and Homebrew
+    # installations survive a rebuild.
     /bin/rm -rf "$ROOT/bin" "$ROOT/usr" "$ROOT/etc" "$ROOT/System" \
-                "$ROOT/dev" "$ROOT/private" "$ROOT/var" "$ROOT/Users" \
-                "$ROOT/sbin" "$ROOT/opt" "$ROOT/tmp" "$ROOT/Library"
-    /bin/mkdir -p "$ROOT"/{bin,sbin,usr/bin,usr/sbin,usr/local/bin,usr/lib,System/Library/dyld,dev,etc,private/tmp,private/var/tmp,var/root,var/run,var/log,var/db/timezone,Users,usr/share/terminfo}
+                "$ROOT/dev" "$ROOT/private" "$ROOT/var" \
+                "$ROOT/sbin" "$ROOT/tmp" "$ROOT/Library"
+    /bin/mkdir -p "$ROOT"/{bin,sbin,usr/bin,usr/sbin,usr/local/bin,usr/lib,System/Library/dyld,dev,etc,private/tmp,private/var/tmp,var/root,var/run,var/log,var/db/timezone,Users,opt,usr/share/terminfo}
     # Standard macOS layout. Bash 3.2 uses here-document temp files under
     # /tmp; scripts that cd to a root-owned directory (e.g. Homebrew's
     # installer) fail without this symlink.
@@ -777,6 +787,7 @@ build_jail() {
     copy_tool /usr/bin/id        usr/bin/id
     copy_tool /usr/bin/whoami    usr/bin/whoami
     copy_tool /usr/bin/uname     usr/bin/uname
+    copy_tool /usr/bin/which     usr/bin/which
     copy_tool /usr/bin/tty       usr/bin/tty
     copy_tool /usr/bin/du        usr/bin/du
     copy_tool /usr/bin/tar       usr/bin/tar
@@ -914,9 +925,12 @@ EOF
     /bin/chmod 644 "$ROOT/etc/jail-user"
 
     # ---- home / tmp / root ----
-    /bin/mkdir -p "$ROOT/Users/$JAIL_USER"
-    /usr/sbin/chown "$JAIL_UID:$JAIL_GID" "$ROOT/Users/$JAIL_USER"
-    /bin/chmod 700 "$ROOT/Users/$JAIL_USER"
+    # Create the home only when missing; an existing Users/ tree is kept as-is.
+    if [ ! -d "$ROOT/Users/$JAIL_USER" ]; then
+        /bin/mkdir -p "$ROOT/Users/$JAIL_USER"
+        /usr/sbin/chown "$JAIL_UID:$JAIL_GID" "$ROOT/Users/$JAIL_USER"
+        /bin/chmod 700 "$ROOT/Users/$JAIL_USER"
+    fi
     /bin/chmod 700 "$ROOT/var/root"
     /bin/chmod 1777 "$ROOT/private/tmp" "$ROOT/private/var/tmp"
 

@@ -84,9 +84,11 @@ JAIL_TMPFS_SIZE=2g ./jail.sh start    # 指定 /tmp tmpfs 大小
 `build` 只替换 rootfs 自己的目录：
 
 ```text
-bin usr etc System dev private var Users sbin opt tmp Library
+bin usr etc System dev private var sbin tmp Library
 ```
 
+`Users/` 和 `opt/` 不会被删除，用户文件、home 目录和 Homebrew
+（`/opt/homebrew`）在重建后保留。
 `jail.sh`、`jail-launcher.c`、`jail-auth.c`、`jail-launcher`、
 `jail-authd`、`jail-passwd`、`README.md`、`.git` 会保留。
 因此可以在仓库目录或已有脚本的目录里重复执行 `build`。
@@ -108,7 +110,7 @@ bin usr etc System dev private var Users sbin opt tmp Library
 - 包含的工具：
   `ls cat cp mv rm mkdir rmdir ln chmod chown date df pwd sleep unlink expr
   realpath echo kill touch stat readlink head tail sort uniq cut tr wc grep
-  sed awk find xargs id whoami uname du tar gzip env printenv mktemp
+  sed awk find xargs id whoami uname which du tar gzip env printenv mktemp
   basename dirname tee cmp comm paste yes printf true false stty tty
   ping curl nc nano nproc`
 - 模拟 `sudo`/`su`（见下节），客户端位于 `/usr/local/bin`，不依赖 setuid。
@@ -348,8 +350,9 @@ sudo -S id              # 从 stdin 读密码（脚本用）
   `jail-authd` 并卸载 devfs/tmpfs；如果进程无法关闭，卸载会 busy。
 - 修改 `jail-launcher.c` / `jail-auth.c` 后重新运行 `./jail.sh build`。
 - `build` 清除 `etc/`，因此容器密码会丢失，需要重新 `set-user-password`。
-- `build` 还会重建 `Users/` 和 `var/root`，home 下的 `.profile`、`.bashrc`
-  以及用户文件都会被重置。
+- `build` 不再清除 `Users/` 和 `opt/`：已有 home、用户文件以及
+  Homebrew（`/opt/homebrew`）都会保留；`.profile`、`.bashrc` 仅在
+  不存在时写入初始版本。`var/root` 仍会重建。
 - `build` 会删除 `Library/`；重新 build 后需再次运行
   `install-cmdlinetools`。
 - macOS 大版本升级后如果 dyld 缓存路径变化，需要同步修改启动器里的
