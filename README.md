@@ -110,7 +110,7 @@ bin usr etc System dev private var sbin tmp Library
 - 包含的工具：
   `ls cat cp mv rm mkdir rmdir ln chmod chown date df pwd sleep unlink expr
   realpath echo kill touch stat readlink head tail sort uniq cut tr wc grep
-  sed awk find xargs id whoami uname which du tar gzip env printenv mktemp
+  sed awk find xargs id whoami uname which du ar tar gzip env printenv mktemp
   basename dirname tee cmp comm paste yes printf true false stty tty
   ping curl nc nano nproc`
 - 模拟 `sudo`/`su`（见下节），客户端位于 `/usr/local/bin`，不依赖 setuid。

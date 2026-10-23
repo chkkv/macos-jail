@@ -790,6 +790,7 @@ build_jail() {
     copy_tool /usr/bin/which     usr/bin/which
     copy_tool /usr/bin/tty       usr/bin/tty
     copy_tool /usr/bin/du        usr/bin/du
+    copy_tool /usr/bin/ar        usr/bin/ar
     copy_tool /usr/bin/tar       usr/bin/tar
     copy_tool /usr/bin/gzip      usr/bin/gzip
     copy_tool /usr/bin/env       usr/bin/env
